@@ -67,7 +67,7 @@ public class MainHook implements IXposedHookLoadPackage {
         if (vp != null) {
             log("✓ 视频就绪: " + vp);
         } else {
-            log("⚠ 视频未找到! 请执行: adb push face.mp4 /data/data/com.xiwei.logistics/files/face.mp4");
+            log("⚠ 视频未找到! 请执行: adb push face.mp4 " + VIDEO_PATH_APP);
         }
         hookImageReaderNew(lpparam);
         hookImageReaderClose(lpparam);
@@ -76,48 +76,23 @@ public class MainHook implements IXposedHookLoadPackage {
         hookSetRepeating(lpparam);
         hookColorFlash(lpparam);
         hookWindowBrightness(lpparam);
-        hookActivityOnCreate(lpparam);
     }
 
-    // ============== 延迟激活 ==============
+    // ============== 延迟激活: 在摄像头Session创建时触发 ==============
 
-    private void hookActivityOnCreate(XC_LoadPackage.LoadPackageParam lpparam) {
-        try {
-            XposedHelpers.findAndHookMethod(Activity.class, "onCreate", Bundle.class,
-                    new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                            try {
-                                Activity act = (Activity) param.thisObject;
-                                String name = act.getClass().getName().toLowerCase(Locale.ROOT);
-                                log("Activity: " + act.getClass().getName());
-                                if (name.contains("face") || name.contains("liveness")
-                                        || name.contains("verify") || name.contains("alive")
-                                        || name.contains("detect") || name.contains("camera")
-                                        || name.contains("auth") || name.contains("identity")
-                                        || name.contains("certif") || name.contains("safex")) {
-                                    log("★★★ 人脸Activity: " + act.getClass().getName());
-                                    activateLivenessHooks(act.getClassLoader());
-                                }
-                            } catch (Throwable t) {
-                                log("ActivityOnCreate异常: " + t.getMessage());
-                            }
-                        }
-                    });
-            log("hookActivityOnCreate ✓");
-        } catch (Throwable t) {
-            log("hookActivityOnCreate 失败: " + t.getMessage());
-        }
-    }
-
-    private void activateLivenessHooks(ClassLoader cl) {
+    private void activateLivenessHooks() {
         if (!livenessHooked.compareAndSet(false, true)) return;
-        log("▶ 激活活体检测绕过");
+        log("▶▶▶ 激活活体检测绕过 (由Camera Session触发)");
         try { hookClassLoading(); } catch (Throwable t) { log("hookClassLoading异常: " + t.getMessage()); }
         try { hookSysProps(); } catch (Throwable t) { log("hookSysProps异常: " + t.getMessage()); }
         try { hookFiles(); } catch (Throwable t) { log("hookFiles异常: " + t.getMessage()); }
         try { hookExec(); } catch (Throwable t) { log("hookExec异常: " + t.getMessage()); }
-        try { scanExistingClasses(cl); } catch (Throwable t) { log("scan异常: " + t.getMessage()); }
+        try {
+            ClassLoader cl = Thread.currentThread().getContextClassLoader();
+            if (cl != null) {
+                scanExistingClasses(cl);
+            }
+        } catch (Throwable t) { log("scan异常: " + t.getMessage()); }
     }
 
     private void scanExistingClasses(ClassLoader cl) {
@@ -298,6 +273,7 @@ public class MainHook implements IXposedHookLoadPackage {
                         ok = true;
                         log("★ Session替换: k=" + k + " " + info[0] + "x" + info[1] + "→dummy");
                         startDecoder(s, vp);
+                        activateLivenessHooks();
                     }
                 }
             }
@@ -339,6 +315,7 @@ public class MainHook implements IXposedHookLoadPackage {
             if (ok && target != null) {
                 param.args[0] = new SessionConfiguration(cfg.getSessionType(), nl, cfg.getExecutor(), cfg.getStateCallback());
                 startDecoder(target, vp);
+                activateLivenessHooks();
             }
         } catch (Throwable t) {
             log("replaceInConfig异常: " + t.getMessage());
@@ -413,7 +390,7 @@ public class MainHook implements IXposedHookLoadPackage {
             synchronized (dummyReaderRefs) {
                 dummyReaderRefs.add(reader);
             }
-            log("Dummy ImageReader 创建: " + w + "x" + h + " fmt=0x" + Integer.toHexString(fmt));
+            log("Dummy创建: " + w + "x" + h + " fmt=0x" + Integer.toHexString(fmt));
             return reader.getSurface();
         } catch (Throwable t) {
             log("makeDummy异常: " + t.getMessage());
