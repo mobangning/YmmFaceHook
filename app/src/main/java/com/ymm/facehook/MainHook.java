@@ -72,11 +72,12 @@ public class MainHook implements IXposedHookLoadPackage {
         hookColorFlash(lpparam);
         hookWindowBrightness(lpparam);
         hookClassLoading(lpparam);
-        hookNativeLib(lpparam);
         hookSysProps(lpparam);
         hookFiles(lpparam);
         hookExec(lpparam);
     }
+
+    // ============== 第1层: 摄像头帧注入 ==============
 
     private void hookImageReaderNew(XC_LoadPackage.LoadPackageParam lpparam) {
         try {
@@ -97,13 +98,13 @@ public class MainHook implements IXposedHookLoadPackage {
                                 irSizeMap.put(k, new int[]{w, h});
                                 log("ImageReader 捕获: " + w + "x" + h + " fmt=0x" + Integer.toHexString(fmt) + " k=" + k);
                             } catch (Throwable t) {
-                                XposedBridge.log(TAG + " ImageReader追踪异常: " + t.getMessage());
+                                log("ImageReader追踪异常: " + t.getMessage());
                             }
                         }
                     });
             log("hookImageReaderNew ✓");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " hookImageReaderNew 失败: " + t.getMessage());
+            log("hookImageReaderNew 失败: " + t.getMessage());
         }
     }
 
@@ -124,13 +125,13 @@ public class MainHook implements IXposedHookLoadPackage {
                                     log("ImageReader 关闭: k=" + k);
                                 }
                             } catch (Throwable t) {
-                                XposedBridge.log(TAG + " ImageReaderClose异常: " + t.getMessage());
+                                log("ImageReaderClose异常: " + t.getMessage());
                             }
                         }
                     });
             log("hookImageReaderClose ✓");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " hookImageReaderClose 失败: " + t.getMessage());
+            log("hookImageReaderClose 失败: " + t.getMessage());
         }
     }
 
@@ -148,7 +149,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 log("hookSessionLegacy[" + cls + "] ✓");
                 return;
             } catch (Throwable t) {
-                XposedBridge.log(TAG + " hookSessionLegacy[" + cls + "] 跳过: " + t.getMessage());
+                log("hookSessionLegacy[" + cls + "] 跳过: " + t.getMessage());
             }
         }
     }
@@ -167,7 +168,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 log("hookSessionNew[" + cls + "] ✓");
                 return;
             } catch (Throwable t) {
-                XposedBridge.log(TAG + " hookSessionNew[" + cls + "] 跳过: " + t.getMessage());
+                log("hookSessionNew[" + cls + "] 跳过: " + t.getMessage());
             }
         }
     }
@@ -187,7 +188,7 @@ public class MainHook implements IXposedHookLoadPackage {
                             });
                     log("hookSetRepeating(Handler)[" + cls + "] ✓");
                 } catch (Throwable t) {
-                    XposedBridge.log(TAG + " hookSetRepeating(Handler)[" + cls + "] 跳过: " + t.getMessage());
+                    log("hookSetRepeating(Handler)[" + cls + "] 跳过: " + t.getMessage());
                 }
                 try {
                     XposedHelpers.findAndHookMethod(c, "setSingleRepeatingRequest",
@@ -200,11 +201,11 @@ public class MainHook implements IXposedHookLoadPackage {
                             });
                     log("hookSetRepeating(Executor)[" + cls + "] ✓");
                 } catch (Throwable t) {
-                    XposedBridge.log(TAG + " hookSetRepeating(Executor)[" + cls + "] 跳过: " + t.getMessage());
+                    log("hookSetRepeating(Executor)[" + cls + "] 跳过: " + t.getMessage());
                 }
                 return;
             } catch (Throwable t) {
-                XposedBridge.log(TAG + " hookSetRepeating[" + cls + "] 跳过: " + t.getMessage());
+                log("hookSetRepeating[" + cls + "] 跳过: " + t.getMessage());
             }
         }
     }
@@ -233,7 +234,7 @@ public class MainHook implements IXposedHookLoadPackage {
             }
             if (ok) param.args[0] = mod;
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " replaceInList异常: " + t.getMessage());
+            log("replaceInList异常: " + t.getMessage());
         }
     }
 
@@ -267,7 +268,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 startDecoder(target, vp);
             }
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " replaceInConfig异常: " + t.getMessage());
+            log("replaceInConfig异常: " + t.getMessage());
         }
     }
 
@@ -298,7 +299,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 log("CaptureRequest Surface 已替换");
             }
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " patchRequest异常: " + t.getMessage());
+            log("patchRequest异常: " + t.getMessage());
         }
     }
 
@@ -318,7 +319,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     }
                 }
             } catch (Throwable t) {
-                XposedBridge.log(TAG + " findSurfaceSetField异常: " + t.getMessage());
+                log("findSurfaceSetField异常: " + t.getMessage());
             }
         }
         return null;
@@ -335,6 +336,8 @@ public class MainHook implements IXposedHookLoadPackage {
         synchronized (dummyRefs) { dummyRefs.add(st); }
         return new Surface(st);
     }
+
+    // ============== 视频解码器 ==============
 
     private synchronized void startDecoder(Surface target, String path) {
         if (decoderRunning.getAndSet(true)) return;
@@ -400,7 +403,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 }
                 log("■ 解码结束 帧=" + fc);
             } catch (Throwable t) {
-                XposedBridge.log(TAG + " 解码异常: " + t.getMessage());
+                log("解码异常: " + t.getMessage());
             } finally {
                 try { if (codec != null) { codec.stop(); codec.release(); } } catch (Throwable ignored) {}
                 try { if (ext != null) ext.release(); } catch (Throwable ignored) {}
@@ -417,6 +420,8 @@ public class MainHook implements IXposedHookLoadPackage {
         if (t != null) { t.interrupt(); decoderThread = null; }
     }
 
+    // ============== 第2层: 三色活体检测绕过 ==============
+
     private void hookColorFlash(XC_LoadPackage.LoadPackageParam lpparam) {
         try {
             XposedHelpers.findAndHookMethod(View.class, "setBackgroundColor", int.class,
@@ -432,23 +437,23 @@ public class MainHook implements IXposedHookLoadPackage {
                                 if (a < 200) return;
                                 if (r > 200 && g < 60 && b < 60) {
                                     colorPhase = 1;
-                                    log("三色: ■ 红色阶段 #" + Integer.toHexString(c));
+                                    log("三色: ■ 红色阶段");
                                 } else if (r < 60 && g > 200 && b < 60) {
                                     colorPhase = 2;
-                                    log("三色: ■ 绿色阶段 #" + Integer.toHexString(c));
+                                    log("三色: ■ 绿色阶段");
                                 } else if (r < 60 && g < 60 && b > 200) {
                                     colorPhase = 3;
-                                    log("三色: ■ 蓝色阶段 #" + Integer.toHexString(c));
+                                    log("三色: ■ 蓝色阶段");
                                 } else if (r > 200 && g > 200 && b > 200) {
                                     colorPhase = 4;
-                                    log("三色: □ 白色阶段 #" + Integer.toHexString(c));
+                                    log("三色: □ 白色阶段");
                                 }
                             } catch (Throwable ignored) {}
                         }
                     });
             log("hookColorFlash ✓");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " hookColorFlash 失败: " + t.getMessage());
+            log("hookColorFlash 失败: " + t.getMessage());
         }
     }
 
@@ -469,9 +474,11 @@ public class MainHook implements IXposedHookLoadPackage {
                     });
             log("hookWindowBrightness ✓");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " hookWindowBrightness 失败: " + t.getMessage());
+            log("hookWindowBrightness 失败: " + t.getMessage());
         }
     }
+
+    // ============== 第3层: 通用活体检测绕过 ==============
 
     private void hookClassLoading(XC_LoadPackage.LoadPackageParam lpparam) {
         try {
@@ -493,31 +500,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     });
             log("hookClassLoading ✓");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " hookClassLoading 失败: " + t.getMessage());
-        }
-    }
-
-    private void hookNativeLib(XC_LoadPackage.LoadPackageParam lpparam) {
-        try {
-            XposedHelpers.findAndHookMethod(System.class, "loadLibrary", String.class,
-                    new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                            try {
-                                String lib = (String) param.args[0];
-                                if (lib == null) return;
-                                String lo = lib.toLowerCase(Locale.ROOT);
-                                if (lo.contains("safex") || lo.contains("liveness")
-                                        || lo.contains("alive") || lo.contains("antispoof")
-                                        || lo.contains("facedetect") || lo.contains("faceverif")) {
-                                    log("★★ 安全SO加载: lib" + lib + ".so");
-                                }
-                            } catch (Throwable ignored) {}
-                        }
-                    });
-            log("hookNativeLib ✓");
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + " hookNativeLib 失败: " + t.getMessage());
+            log("hookClassLoading 失败: " + t.getMessage());
         }
     }
 
@@ -537,11 +520,11 @@ public class MainHook implements IXposedHookLoadPackage {
                         force(m, rt, "M");
                     }
                 } catch (Throwable t) {
-                    XposedBridge.log(TAG + "  方法异常: " + m.getName() + ": " + t.getMessage());
+                    log("  方法异常: " + m.getName() + ": " + t.getMessage());
                 }
             }
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " hookLivenessClass异常: " + t.getMessage());
+            log("hookLivenessClass异常: " + t.getMessage());
         }
     }
 
@@ -557,41 +540,49 @@ public class MainHook implements IXposedHookLoadPackage {
                 XposedBridge.hookMethod(m, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam p) throws Throwable {
-                        Object o = p.getResult();
-                        p.setResult(val);
-                        log("  ★[" + tag + "] " + m.getName() + ": " + o + "→" + val);
+                        try {
+                            Object o = p.getResult();
+                            p.setResult(val);
+                            log("  ★[" + tag + "] " + m.getName() + ": " + o + "→" + val);
+                        } catch (Throwable ignored) {}
                     }
                 });
             } else if (rt == int.class) {
                 XposedBridge.hookMethod(m, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam p) throws Throwable {
-                        Object o = p.getResult();
-                        p.setResult(0);
-                        log("  ★[" + tag + "] " + m.getName() + ": " + o + "→0");
+                        try {
+                            Object o = p.getResult();
+                            p.setResult(0);
+                            log("  ★[" + tag + "] " + m.getName() + ": " + o + "→0");
+                        } catch (Throwable ignored) {}
                     }
                 });
             } else if (rt == float.class) {
                 XposedBridge.hookMethod(m, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam p) throws Throwable {
-                        Object o = p.getResult();
-                        p.setResult(0.99f);
-                        log("  ★[" + tag + "] " + m.getName() + ": " + o + "→0.99");
+                        try {
+                            Object o = p.getResult();
+                            p.setResult(0.99f);
+                            log("  ★[" + tag + "] " + m.getName() + ": " + o + "→0.99");
+                        } catch (Throwable ignored) {}
                     }
                 });
             } else if (rt == double.class) {
                 XposedBridge.hookMethod(m, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam p) throws Throwable {
-                        p.setResult(0.99);
+                        try { p.setResult(0.99); } catch (Throwable ignored) {}
                     }
                 });
             }
         } catch (Throwable t) {
-            XposedBridge.log(TAG + "  force失败: " + m.getName() + ": " + t.getMessage());
+            log("  force失败: " + m.getName() + ": " + t.getMessage());
         }
     }
+
+    // ============== 第4层: 环境伪装 ==============
 
     private void hookSysProps(XC_LoadPackage.LoadPackageParam lpparam) {
         try {
@@ -611,7 +602,7 @@ public class MainHook implements IXposedHookLoadPackage {
             XposedHelpers.findAndHookMethod(sp, "get", String.class, String.class, h);
             log("hookSysProps ✓");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " hookSysProps 失败: " + t.getMessage());
+            log("hookSysProps 失败: " + t.getMessage());
         }
     }
 
@@ -631,7 +622,7 @@ public class MainHook implements IXposedHookLoadPackage {
             XposedHelpers.findAndHookMethod(File.class, "canExecute", h);
             log("hookFiles ✓");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " hookFiles 失败: " + t.getMessage());
+            log("hookFiles 失败: " + t.getMessage());
         }
     }
 
@@ -665,9 +656,11 @@ public class MainHook implements IXposedHookLoadPackage {
                     });
             log("hookExec ✓");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " hookExec 失败: " + t.getMessage());
+            log("hookExec 失败: " + t.getMessage());
         }
     }
+
+    // ============== 工具 ==============
 
     private static String findVideo() {
         if (new File(VIDEO_PATH).exists()) return VIDEO_PATH;
