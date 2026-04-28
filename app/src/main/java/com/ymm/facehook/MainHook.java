@@ -396,7 +396,7 @@ public class MainHook implements IXposedHookLoadPackage {
                         codec.releaseOutputBuffer(oi, true);
                         fc++;
                         if (fc % 90 == 1) log("▶ 帧=" + fc + " 色阶=" + colorPhase);
-                        try { Thread.sleep(Math.max(frameUs / 1000, 16)); } catch (InterruptedException e) { break; }
+                        try { Thread.sleep(Math.max(frameUs / 1000, 16)); } catch (InterruptedException ignored) { break; }
                         if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                             codec.flush();
                             ext.seekTo(0, MediaExtractor.SEEK_TO_CLOSEST_SYNC);
@@ -406,8 +406,6 @@ public class MainHook implements IXposedHookLoadPackage {
                     }
                 }
                 log("■ 解码结束 帧=" + fc);
-            } catch (InterruptedException e) {
-                log("解码中断");
             } catch (Throwable t) {
                 log("✗ 解码异常: " + t.getMessage());
             } finally {
@@ -679,7 +677,7 @@ public class MainHook implements IXposedHookLoadPackage {
                                     log("拦截: " + c);
                                     param.setThrowable(new IOException("denied"));
                                 }
-                            } catch (IOException e) { throw e; } catch (Throwable ignored) {}
+                            } catch (Throwable ignored) {}
                         }
                     });
             XposedHelpers.findAndHookMethod(Runtime.class, "exec", String[].class,
@@ -692,7 +690,7 @@ public class MainHook implements IXposedHookLoadPackage {
                                     log("拦截: " + cs[0]);
                                     param.setThrowable(new IOException("denied"));
                                 }
-                            } catch (IOException e) { throw e; } catch (Throwable ignored) {}
+                            } catch (Throwable ignored) {}
                         }
                     });
             log("hookExec ✓");
