@@ -7,6 +7,6 @@
         <meta-data android:name="xposeddescription" android:value="运满满人脸验证辅助 - 视频帧注入+三色活体绕过" />
         <meta-data android:name="xposedminversion" android:value="82" />
         <meta-data android:name="xposedscope" android:resource="@array/xposed_scope" />
-        <meta-data android:name="xposedauthor" android:value="模块工匠" />
+        <meta-data android:name="xposedauthor" android:value="灰色的天" />
     </application>
 </manifest>
