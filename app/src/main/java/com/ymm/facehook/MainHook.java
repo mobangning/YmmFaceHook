@@ -55,8 +55,6 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final List<SurfaceTexture> dummyRefs = new ArrayList<>();
     private static volatile int colorPhase = 0;
 
-    // ====================== 入口 ======================
-
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
         if (!TARGET_PKG.equals(lpparam.packageName)) return;
@@ -396,7 +394,7 @@ public class MainHook implements IXposedHookLoadPackage {
                         codec.releaseOutputBuffer(oi, true);
                         fc++;
                         if (fc % 90 == 1) log("▶ 帧=" + fc + " 色阶=" + colorPhase);
-                        try { Thread.sleep(Math.max(frameUs / 1000, 16)); } catch (InterruptedException ignored) { break; }
+                        try { Thread.sleep(Math.max(frameUs / 1000, 16)); } catch (InterruptedException e) { break; }
                         if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                             codec.flush();
                             ext.seekTo(0, MediaExtractor.SEEK_TO_CLOSEST_SYNC);
@@ -406,6 +404,8 @@ public class MainHook implements IXposedHookLoadPackage {
                     }
                 }
                 log("■ 解码结束 帧=" + fc);
+            } catch (InterruptedException e) {
+                log("解码中断");
             } catch (Throwable t) {
                 log("✗ 解码异常: " + t.getMessage());
             } finally {
@@ -471,7 +471,7 @@ public class MainHook implements IXposedHookLoadPackage {
                             try {
                                 WindowManager.LayoutParams lp = (WindowManager.LayoutParams) param.args[0];
                                 if (lp.screenBrightness >= 0.95f) {
-                                    log("三色: 亮度=" + lp.screenBrightness + " (炫彩闪烁中)");
+                                    log("三色: 亮度=" + lp.screenBrightness);
                                 }
                             } catch (Throwable ignored) {}
                         }
@@ -508,6 +508,10 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
+    /**
+     * 只 hook System.loadLibrary，纯监控日志，不拦截不修改参数
+     * 绝对不能 hook Runtime.loadLibrary0，否则会导致系统库加载崩溃
+     */
     private void hookNativeLib(XC_LoadPackage.LoadPackageParam lpparam) {
         try {
             XposedHelpers.findAndHookMethod(System.class, "loadLibrary", String.class,
@@ -516,8 +520,12 @@ public class MainHook implements IXposedHookLoadPackage {
                         protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                             try {
                                 String lib = (String) param.args[0];
-                                if (lib != null && isTargetLib(lib.toLowerCase(Locale.ROOT))) {
-                                    log("★★ SO加载: lib" + lib + ".so");
+                                if (lib == null) return;
+                                String lo = lib.toLowerCase(Locale.ROOT);
+                                if (lo.contains("safex") || lo.contains("liveness")
+                                        || lo.contains("alive") || lo.contains("antispoof")
+                                        || lo.contains("facedetect") || lo.contains("faceverif")) {
+                                    log("★★ 安全SO加载: lib" + lib + ".so");
                                 }
                             } catch (Throwable ignored) {}
                         }
@@ -525,27 +533,6 @@ public class MainHook implements IXposedHookLoadPackage {
             log("hookNativeLib ✓");
         } catch (Throwable t) {
             log("hookNativeLib 失败: " + t.getMessage());
-        }
-        try {
-            XposedHelpers.findAndHookMethod(Runtime.class, "loadLibrary0",
-                    Class.class, String.class,
-                    new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                            try {
-                                String lib = (String) param.args[1];
-                                if (lib != null && isTargetLib(lib.toLowerCase(Locale.ROOT))) {
-                                    log("★★ RT SO: " + lib);
-                                    Class<?> caller = (Class<?>) param.args[0];
-                                    if (caller != null && hookedClasses.add(caller.getName())) {
-                                        hookLivenessClass(caller);
-                                    }
-                                }
-                            } catch (Throwable ignored) {}
-                        }
-                    });
-        } catch (Throwable t) {
-            log("hookLoadLibrary0 跳过: " + t.getMessage());
         }
     }
 
@@ -677,7 +664,7 @@ public class MainHook implements IXposedHookLoadPackage {
                                     log("拦截: " + c);
                                     param.setThrowable(new IOException("denied"));
                                 }
-                            } catch (Throwable ignored) {}
+                            } catch (IOException e) { throw e; } catch (Throwable ignored) {}
                         }
                     });
             XposedHelpers.findAndHookMethod(Runtime.class, "exec", String[].class,
@@ -690,7 +677,7 @@ public class MainHook implements IXposedHookLoadPackage {
                                     log("拦截: " + cs[0]);
                                     param.setThrowable(new IOException("denied"));
                                 }
-                            } catch (Throwable ignored) {}
+                            } catch (IOException e) { throw e; } catch (Throwable ignored) {}
                         }
                     });
             log("hookExec ✓");
@@ -731,7 +718,7 @@ public class MainHook implements IXposedHookLoadPackage {
         if (l.contains("reflect") && (l.contains("detect") || l.contains("analy") || l.contains("check"))) {
             return true;
         }
-        if (l.contains("illumin") || l.contains("flash") && l.contains("live")) {
+        if (l.contains("illumin") || (l.contains("flash") && l.contains("live"))) {
             return true;
         }
         if (l.contains("face") && (l.contains("live") || l.contains("verify") || l.contains("detect")
@@ -752,12 +739,6 @@ public class MainHook implements IXposedHookLoadPackage {
                 || l.contains("flash") || l.contains("illumin") || l.contains("bright")
                 || l.contains("spectrum") || l.contains("infrared") || l.contains("depth")
                 || l.contains("mask") || l.contains("recapture") || l.contains("reprint");
-    }
-
-    private static boolean isTargetLib(String l) {
-        return l.contains("safex") || l.contains("liveness") || l.contains("alive")
-                || l.contains("antispoof") || l.contains("facedetect") || l.contains("faceverif")
-                || l.contains("colorlive") || l.contains("rgblive");
     }
 
     private static String spoofProp(String k) {
