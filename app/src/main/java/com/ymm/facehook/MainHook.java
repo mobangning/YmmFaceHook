@@ -2,12 +2,13 @@ package com.ymm.facehook;
 
 import android.app.Activity;
 import android.graphics.Color;
-import android.graphics.SurfaceTexture;
+import android.graphics.ImageFormat;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.params.OutputConfiguration;
 import android.hardware.camera2.params.SessionConfiguration;
+import android.media.Image;
 import android.media.ImageReader;
 import android.media.MediaCodec;
 import android.media.MediaExtractor;
@@ -44,17 +45,18 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private static final String TAG = "[YmmFace]";
     private static final String TARGET_PKG = "com.xiwei.logistics";
-    private static final String VIDEO_PATH = "/sdcard/DCIM/face.mp4";
-    private static final String VIDEO_PATH_ALT = "/data/local/tmp/face.mp4";
+    private static final String VIDEO_PATH_APP = "/data/data/com.xiwei.logistics/files/face.mp4";
+    private static final String VIDEO_PATH_TMP = "/data/local/tmp/face.mp4";
 
     private static final Map<Integer, Surface> irSurfaceMap = new ConcurrentHashMap<>();
     private static final Map<Integer, int[]> irSizeMap = new ConcurrentHashMap<>();
     private static final Map<Integer, Surface> dummyMap = new ConcurrentHashMap<>();
     private static final AtomicBoolean decoderRunning = new AtomicBoolean(false);
     private static final AtomicBoolean livenessHooked = new AtomicBoolean(false);
+    private static final AtomicBoolean creatingDummy = new AtomicBoolean(false);
     private static volatile Thread decoderThread = null;
     private static final Set<String> hookedClasses = ConcurrentHashMap.newKeySet();
-    private static final List<SurfaceTexture> dummyRefs = new ArrayList<>();
+    private static final List<ImageReader> dummyReaderRefs = new ArrayList<>();
     private static volatile int colorPhase = 0;
 
     @Override
@@ -65,7 +67,7 @@ public class MainHook implements IXposedHookLoadPackage {
         if (vp != null) {
             log("✓ 视频就绪: " + vp);
         } else {
-            log("⚠ 视频未找到, 请放置到 " + VIDEO_PATH);
+            log("⚠ 视频未找到! 请执行: adb push face.mp4 /data/data/com.xiwei.logistics/files/face.mp4");
         }
         hookImageReaderNew(lpparam);
         hookImageReaderClose(lpparam);
@@ -77,7 +79,7 @@ public class MainHook implements IXposedHookLoadPackage {
         hookActivityOnCreate(lpparam);
     }
 
-    // ============== 延迟激活: 等人脸Activity启动后再hook活体检测 ==============
+    // ============== 延迟激活 ==============
 
     private void hookActivityOnCreate(XC_LoadPackage.LoadPackageParam lpparam) {
         try {
@@ -94,7 +96,7 @@ public class MainHook implements IXposedHookLoadPackage {
                                         || name.contains("detect") || name.contains("camera")
                                         || name.contains("auth") || name.contains("identity")
                                         || name.contains("certif") || name.contains("safex")) {
-                                    log("★★★ 人脸Activity检测到: " + act.getClass().getName());
+                                    log("★★★ 人脸Activity: " + act.getClass().getName());
                                     activateLivenessHooks(act.getClassLoader());
                                 }
                             } catch (Throwable t) {
@@ -110,46 +112,25 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private void activateLivenessHooks(ClassLoader cl) {
         if (!livenessHooked.compareAndSet(false, true)) return;
-        log("▶ 激活活体检测绕过...");
-        try {
-            hookClassLoading();
-        } catch (Throwable t) {
-            log("activateLivenessHooks异常: " + t.getMessage());
-        }
-        try {
-            hookSysProps();
-        } catch (Throwable t) {
-            log("hookSysProps异常: " + t.getMessage());
-        }
-        try {
-            hookFiles();
-        } catch (Throwable t) {
-            log("hookFiles异常: " + t.getMessage());
-        }
-        try {
-            hookExec();
-        } catch (Throwable t) {
-            log("hookExec异常: " + t.getMessage());
-        }
-        try {
-            scanExistingClasses(cl);
-        } catch (Throwable t) {
-            log("scanExistingClasses异常: " + t.getMessage());
-        }
+        log("▶ 激活活体检测绕过");
+        try { hookClassLoading(); } catch (Throwable t) { log("hookClassLoading异常: " + t.getMessage()); }
+        try { hookSysProps(); } catch (Throwable t) { log("hookSysProps异常: " + t.getMessage()); }
+        try { hookFiles(); } catch (Throwable t) { log("hookFiles异常: " + t.getMessage()); }
+        try { hookExec(); } catch (Throwable t) { log("hookExec异常: " + t.getMessage()); }
+        try { scanExistingClasses(cl); } catch (Throwable t) { log("scan异常: " + t.getMessage()); }
     }
 
     private void scanExistingClasses(ClassLoader cl) {
-        String[] probeClasses = {
+        String[] probes = {
                 "com.sensetime.liveness.LivenessDetector",
                 "com.megvii.liveness.Liveness",
                 "com.baidu.idl.face.platform.FaceStatusNewEnum",
                 "com.tencent.youtu.YTFaceTracker",
-                "com.alipay.mobile.security.bio.service.BioMetricService",
                 "com.face.liveness.Silent",
                 "com.xiwei.safex.SafeXDetector",
                 "com.wlqq.phantom.plugin.ymm.facedetect.FaceDetectActivity",
         };
-        for (String name : probeClasses) {
+        for (String name : probes) {
             try {
                 Class<?> c = cl.loadClass(name);
                 if (c != null && hookedClasses.add(name)) {
@@ -172,6 +153,7 @@ public class MainHook implements IXposedHookLoadPackage {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                             try {
+                                if (creatingDummy.get()) return;
                                 ImageReader r = (ImageReader) param.getResult();
                                 if (r == null) return;
                                 int w = (int) param.args[0];
@@ -180,7 +162,7 @@ public class MainHook implements IXposedHookLoadPackage {
                                 Surface s = r.getSurface();
                                 int k = System.identityHashCode(s);
                                 irSurfaceMap.put(k, s);
-                                irSizeMap.put(k, new int[]{w, h});
+                                irSizeMap.put(k, new int[]{w, h, fmt});
                                 log("ImageReader 捕获: " + w + "x" + h + " fmt=0x" + Integer.toHexString(fmt) + " k=" + k);
                             } catch (Throwable t) {
                                 log("ImageReader追踪异常: " + t.getMessage());
@@ -271,9 +253,9 @@ public class MainHook implements IXposedHookLoadPackage {
                                     patchRequest((CaptureRequest) param.args[0]);
                                 }
                             });
-                    log("hookSetRepeating(Handler)[" + cls + "] ✓");
+                    log("hookSetRepeating(H)[" + cls + "] ✓");
                 } catch (Throwable t) {
-                    log("hookSetRepeating(Handler)[" + cls + "] 跳过: " + t.getMessage());
+                    log("hookSetRepeating(H)[" + cls + "] 跳过: " + t.getMessage());
                 }
                 try {
                     XposedHelpers.findAndHookMethod(c, "setSingleRepeatingRequest",
@@ -284,9 +266,9 @@ public class MainHook implements IXposedHookLoadPackage {
                                     patchRequest((CaptureRequest) param.args[0]);
                                 }
                             });
-                    log("hookSetRepeating(Executor)[" + cls + "] ✓");
+                    log("hookSetRepeating(E)[" + cls + "] ✓");
                 } catch (Throwable t) {
-                    log("hookSetRepeating(Executor)[" + cls + "] 跳过: " + t.getMessage());
+                    log("hookSetRepeating(E)[" + cls + "] 跳过: " + t.getMessage());
                 }
                 return;
             } catch (Throwable t) {
@@ -308,13 +290,15 @@ public class MainHook implements IXposedHookLoadPackage {
                 Surface s = mod.get(i);
                 int k = System.identityHashCode(s);
                 if (irSurfaceMap.containsKey(k)) {
-                    int[] sz = irSizeMap.getOrDefault(k, new int[]{640, 480});
-                    Surface dummy = makeDummy(sz[0], sz[1]);
-                    dummyMap.put(k, dummy);
-                    mod.set(i, dummy);
-                    ok = true;
-                    log("★ Session替换: k=" + k + " " + sz[0] + "x" + sz[1] + "→dummy");
-                    startDecoder(s, vp);
+                    int[] info = irSizeMap.getOrDefault(k, new int[]{640, 480, ImageFormat.YUV_420_888});
+                    Surface dummy = makeDummy(info[0], info[1], info[2]);
+                    if (dummy != null) {
+                        dummyMap.put(k, dummy);
+                        mod.set(i, dummy);
+                        ok = true;
+                        log("★ Session替换: k=" + k + " " + info[0] + "x" + info[1] + "→dummy");
+                        startDecoder(s, vp);
+                    }
                 }
             }
             if (ok) param.args[0] = mod;
@@ -337,13 +321,17 @@ public class MainHook implements IXposedHookLoadPackage {
                 Surface s = oc.getSurface();
                 int k = System.identityHashCode(s);
                 if (irSurfaceMap.containsKey(k)) {
-                    int[] sz = irSizeMap.getOrDefault(k, new int[]{640, 480});
-                    Surface dummy = makeDummy(sz[0], sz[1]);
-                    dummyMap.put(k, dummy);
-                    nl.add(new OutputConfiguration(dummy));
-                    target = s;
-                    ok = true;
-                    log("★ Config替换: k=" + k + "→dummy");
+                    int[] info = irSizeMap.getOrDefault(k, new int[]{640, 480, ImageFormat.YUV_420_888});
+                    Surface dummy = makeDummy(info[0], info[1], info[2]);
+                    if (dummy != null) {
+                        dummyMap.put(k, dummy);
+                        nl.add(new OutputConfiguration(dummy));
+                        target = s;
+                        ok = true;
+                        log("★ Config替换: k=" + k + "→dummy");
+                    } else {
+                        nl.add(oc);
+                    }
                 } else {
                     nl.add(oc);
                 }
@@ -410,16 +398,29 @@ public class MainHook implements IXposedHookLoadPackage {
         return null;
     }
 
-    private Surface makeDummy(int w, int h) {
-        SurfaceTexture st = new SurfaceTexture(0);
-        st.setDefaultBufferSize(w, h);
+    private Surface makeDummy(int w, int h, int fmt) {
+        creatingDummy.set(true);
         try {
-            st.setOnFrameAvailableListener(tex -> {
-                try { tex.updateTexImage(); } catch (Throwable ignored) {}
+            if (fmt <= 0) fmt = ImageFormat.YUV_420_888;
+            ImageReader reader = ImageReader.newInstance(w, h, fmt, 3);
+            reader.setOnImageAvailableListener(r -> {
+                try {
+                    Image img = r.acquireLatestImage();
+                    if (img != null) img.close();
+                } catch (Throwable ignored) {
+                }
             }, new Handler(Looper.getMainLooper()));
-        } catch (Throwable ignored) {}
-        synchronized (dummyRefs) { dummyRefs.add(st); }
-        return new Surface(st);
+            synchronized (dummyReaderRefs) {
+                dummyReaderRefs.add(reader);
+            }
+            log("Dummy ImageReader 创建: " + w + "x" + h + " fmt=0x" + Integer.toHexString(fmt));
+            return reader.getSurface();
+        } catch (Throwable t) {
+            log("makeDummy异常: " + t.getMessage());
+            return null;
+        } finally {
+            creatingDummy.set(false);
+        }
     }
 
     // ============== 视频解码器 ==============
@@ -438,9 +439,16 @@ public class MainHook implements IXposedHookLoadPackage {
                 for (int i = 0; i < ext.getTrackCount(); i++) {
                     MediaFormat f = ext.getTrackFormat(i);
                     String mime = f.getString(MediaFormat.KEY_MIME);
-                    if (mime != null && mime.startsWith("video/")) { ti = i; fmt = f; break; }
+                    if (mime != null && mime.startsWith("video/")) {
+                        ti = i;
+                        fmt = f;
+                        break;
+                    }
                 }
-                if (ti < 0 || fmt == null) { log("✗ 无视频轨"); return; }
+                if (ti < 0 || fmt == null) {
+                    log("✗ 无视频轨");
+                    return;
+                }
                 ext.selectTrack(ti);
                 String mime = fmt.getString(MediaFormat.KEY_MIME);
                 long frameUs = 33333L;
@@ -490,8 +498,17 @@ public class MainHook implements IXposedHookLoadPackage {
             } catch (Throwable t) {
                 log("解码异常: " + t.getMessage());
             } finally {
-                try { if (codec != null) { codec.stop(); codec.release(); } } catch (Throwable ignored) {}
-                try { if (ext != null) ext.release(); } catch (Throwable ignored) {}
+                try {
+                    if (codec != null) {
+                        codec.stop();
+                        codec.release();
+                    }
+                } catch (Throwable ignored) {
+                }
+                try {
+                    if (ext != null) ext.release();
+                } catch (Throwable ignored) {
+                }
                 decoderRunning.set(false);
             }
         }, "YmmFace-Dec");
@@ -502,10 +519,13 @@ public class MainHook implements IXposedHookLoadPackage {
     private synchronized void stopDecoder() {
         decoderRunning.set(false);
         Thread t = decoderThread;
-        if (t != null) { t.interrupt(); decoderThread = null; }
+        if (t != null) {
+            t.interrupt();
+            decoderThread = null;
+        }
     }
 
-    // ============== 第2层: 三色活体检测监控 ==============
+    // ============== 第2层: 三色监控 ==============
 
     private void hookColorFlash(XC_LoadPackage.LoadPackageParam lpparam) {
         try {
@@ -522,18 +542,19 @@ public class MainHook implements IXposedHookLoadPackage {
                                 if (a < 200) return;
                                 if (r > 200 && g < 60 && b < 60) {
                                     colorPhase = 1;
-                                    log("三色: ■ 红色阶段");
+                                    log("三色: ■ 红色");
                                 } else if (r < 60 && g > 200 && b < 60) {
                                     colorPhase = 2;
-                                    log("三色: ■ 绿色阶段");
+                                    log("三色: ■ 绿色");
                                 } else if (r < 60 && g < 60 && b > 200) {
                                     colorPhase = 3;
-                                    log("三色: ■ 蓝色阶段");
+                                    log("三色: ■ 蓝色");
                                 } else if (r > 200 && g > 200 && b > 200) {
                                     colorPhase = 4;
-                                    log("三色: □ 白色阶段");
+                                    log("三色: □ 白色");
                                 }
-                            } catch (Throwable ignored) {}
+                            } catch (Throwable ignored) {
+                            }
                         }
                     });
             log("hookColorFlash ✓");
@@ -554,7 +575,8 @@ public class MainHook implements IXposedHookLoadPackage {
                                 if (lp.screenBrightness >= 0.95f) {
                                     log("三色: 亮度=" + lp.screenBrightness);
                                 }
-                            } catch (Throwable ignored) {}
+                            } catch (Throwable ignored) {
+                            }
                         }
                     });
             log("hookWindowBrightness ✓");
@@ -563,7 +585,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
-    // ============== 第3层: 延迟激活的活体检测绕过 ==============
+    // ============== 第3层: 延迟活体绕过 ==============
 
     private void hookClassLoading() {
         try {
@@ -580,7 +602,8 @@ public class MainHook implements IXposedHookLoadPackage {
                                 if (isTargetClass(n) && hookedClasses.add(n)) {
                                     hookLivenessClass(r);
                                 }
-                            } catch (Throwable ignored) {}
+                            } catch (Throwable ignored) {
+                            }
                         }
                     });
             log("hookClassLoading(延迟) ✓");
@@ -605,7 +628,7 @@ public class MainHook implements IXposedHookLoadPackage {
                         force(m, rt, "M");
                     }
                 } catch (Throwable t) {
-                    log("  方法异常: " + m.getName() + ": " + t.getMessage());
+                    log("  方法异常: " + t.getMessage());
                 }
             }
         } catch (Throwable t) {
@@ -626,10 +649,9 @@ public class MainHook implements IXposedHookLoadPackage {
                     @Override
                     protected void afterHookedMethod(MethodHookParam p) throws Throwable {
                         try {
-                            Object o = p.getResult();
                             p.setResult(val);
-                            log("  ★[" + tag + "] " + m.getName() + ": " + o + "→" + val);
-                        } catch (Throwable ignored) {}
+                        } catch (Throwable ignored) {
+                        }
                     }
                 });
             } else if (rt == int.class) {
@@ -637,10 +659,9 @@ public class MainHook implements IXposedHookLoadPackage {
                     @Override
                     protected void afterHookedMethod(MethodHookParam p) throws Throwable {
                         try {
-                            Object o = p.getResult();
                             p.setResult(0);
-                            log("  ★[" + tag + "] " + m.getName() + ": " + o + "→0");
-                        } catch (Throwable ignored) {}
+                        } catch (Throwable ignored) {
+                        }
                     }
                 });
             } else if (rt == float.class) {
@@ -648,17 +669,19 @@ public class MainHook implements IXposedHookLoadPackage {
                     @Override
                     protected void afterHookedMethod(MethodHookParam p) throws Throwable {
                         try {
-                            Object o = p.getResult();
                             p.setResult(0.99f);
-                            log("  ★[" + tag + "] " + m.getName() + ": " + o + "→0.99");
-                        } catch (Throwable ignored) {}
+                        } catch (Throwable ignored) {
+                        }
                     }
                 });
             } else if (rt == double.class) {
                 XposedBridge.hookMethod(m, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam p) throws Throwable {
-                        try { p.setResult(0.99); } catch (Throwable ignored) {}
+                        try {
+                            p.setResult(0.99);
+                        } catch (Throwable ignored) {
+                        }
                     }
                 });
             }
@@ -667,7 +690,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
-    // ============== 第4层: 延迟激活的环境伪装 ==============
+    // ============== 第4层: 延迟环境伪装 ==============
 
     private void hookSysProps() {
         try {
@@ -680,7 +703,8 @@ public class MainHook implements IXposedHookLoadPackage {
                         if (k == null) return;
                         String v = spoofProp(k);
                         if (v != null) param.setResult(v);
-                    } catch (Throwable ignored) {}
+                    } catch (Throwable ignored) {
+                    }
                 }
             };
             XposedHelpers.findAndHookMethod(sp, "get", String.class, h);
@@ -699,7 +723,8 @@ public class MainHook implements IXposedHookLoadPackage {
                     try {
                         String p = ((File) param.thisObject).getAbsolutePath();
                         if (isRootPath(p)) param.setResult(false);
-                    } catch (Throwable ignored) {}
+                    } catch (Throwable ignored) {
+                    }
                 }
             };
             XposedHelpers.findAndHookMethod(File.class, "exists", h);
@@ -720,10 +745,10 @@ public class MainHook implements IXposedHookLoadPackage {
                             try {
                                 String c = (String) param.args[0];
                                 if (c != null && isBadCmd(c)) {
-                                    log("拦截: " + c);
                                     param.setResult(null);
                                 }
-                            } catch (Throwable ignored) {}
+                            } catch (Throwable ignored) {
+                            }
                         }
                     });
             XposedHelpers.findAndHookMethod(Runtime.class, "exec", String[].class,
@@ -733,10 +758,10 @@ public class MainHook implements IXposedHookLoadPackage {
                             try {
                                 String[] cs = (String[]) param.args[0];
                                 if (cs != null && cs.length > 0 && isBadCmd(cs[0])) {
-                                    log("拦截: " + cs[0]);
                                     param.setResult(null);
                                 }
-                            } catch (Throwable ignored) {}
+                            } catch (Throwable ignored) {
+                            }
                         }
                     });
             log("hookExec(延迟) ✓");
@@ -748,8 +773,8 @@ public class MainHook implements IXposedHookLoadPackage {
     // ============== 工具 ==============
 
     private static String findVideo() {
-        if (new File(VIDEO_PATH).exists()) return VIDEO_PATH;
-        if (new File(VIDEO_PATH_ALT).exists()) return VIDEO_PATH_ALT;
+        if (new File(VIDEO_PATH_APP).canRead()) return VIDEO_PATH_APP;
+        if (new File(VIDEO_PATH_TMP).canRead()) return VIDEO_PATH_TMP;
         return null;
     }
 
